@@ -1,0 +1,10 @@
+body {
+  background-color: #4286f4;
+}
+div {
+  display: inline-block;
+}
+img {
+  height: 300px;
+  width: 300px;
+}
