@@ -1,3 +1,3 @@
 function onload() {
-  document.getElementById("demo").innerHTML = "loaded javascript";
+  document.getElementById("javascriptdemo").innerHTML = "loaded javascript";
 }

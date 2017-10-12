@@ -84,15 +84,24 @@ public final class WebServer {
 
 				StringTokenizer tokens = new StringTokenizer(requestLine);
 				String method = tokens.nextToken();
+
 				if(!method.equals("GET")) { // verify the method is GET
 					System.err.println("Unsupported method request " + method);	
-					//throw new IOException(); // TODO change to return; ?
-					return null;
+					return null; // return because the method should not be handled by this server
 				}  
+
 				String fileName = tokens.nextToken();
-				fileName = "." + fileName;
+
+				if(fileName.equals("/")) // user sent blank information after host/port, default to index page
+					fileName += "index.html";
+
+				fileName = "." + fileName; // make this UNIX-friendly
+
 				if(fileName.endsWith("/")) // remove a trailing '/' character
 					fileName = fileName.substring(0, fileName.length()-1);
+
+				while(fileName.contains("..")) // remove any .. that may allow access to unintended files in other directories 
+					fileName = fileName.replace("..", ".");
 
 				// Open the requested file
 				FileInputStream file = null;
@@ -101,20 +110,27 @@ public final class WebServer {
 				try {
 					file = new FileInputStream(fileName);
 				} catch (FileNotFoundException e) {
-					fileExists = false;
-				} // TODO retry with a preceeding "/" or redirect to "/index.html"
-				  // disallow some illgegal paths, i.e. "..." in them
-				
+					try {
+						fileName = fileName.replaceFirst(".", ""); // removes the "." appended earlier in the program
+						file = new FileInputStream("./" + fileName); // retry with preceeding "./" if not found
+					} catch (FileNotFoundException exc) {
+						fileExists = false; // give up, couldn't find the file
+					}
+				} 
 				
 				// Construct the response message
-				String statusLine = null;
+				String statusLine = "";
 				String contentTypeLine = null;
-				String entityBody = null;
+				String entityBody = "";
+
 				// normal response
 				if(fileExists) {
-					statusLine = "HTTP/1.1 200 OK";
-					contentTypeLine = "Content-type: " + contentType(fileName);
-				// document not found, constant 404 page
+					statusLine = "HTTP/1.1 200 OK\n";
+					String contentType = "Content-type: " + contentType(fileName) + "\n";
+					if(!contentType.equals("unknown"))
+						contentTypeLine = contentType;
+
+				// document not found, build 404 page
 				} else {
 					statusLine = "HTTP/1.1 404 Not Found";
 					contentTypeLine = "text/html";
@@ -123,16 +139,21 @@ public final class WebServer {
 								 "<HEAD>\n" +
 								 "<TITLE>404 Not Found</TITLE>\n" +
 								 "</HEAD>\n" +
-								 "<BODY>The requested file could not be found on the server. Click <a href=\"./index.html\">here</a> to go to home page</BODY>\n" +
+								 "<BODY>The requested file could not be found on the server. Click <a href=\"./index.html\">here</a> to go to home page.\n" +
+								"<p>You will be automatically redirected in 3 seconds.</p>\n" +
+								"<SCRIPT>\n" +
+								"window.setTimeout(function(){ window.location.replace(\'/index.html\'); },3000)\n" +
+								 "</SCRIPT>" +
+								 "<BODY>\n" +
 								 "</HTML>";
 				}
 	
 	
 				// Send the responses
 				outToClient.writeBytes(statusLine);
-				outToClient.writeBytes(CRLF);
-				outToClient.writeBytes(contentTypeLine);
-				outToClient.writeBytes(CRLF + CRLF); // doesn't work without 2 for some reason
+				if(contentTypeLine != null) // see comment in contentType() for explanation
+					outToClient.writeBytes(contentTypeLine);
+				outToClient.writeBytes(CRLF); 
 
 				// log the header that was sent to client
 				// synchronized ensures the order of print statements won't mix with other threads
@@ -142,13 +163,14 @@ public final class WebServer {
 					System.out.println(contentTypeLine);
 					System.out.println("---------- End server response header --------\n\n");
 				}
+
 				if(fileExists) {
 					try {
 						sendBytes(file, outToClient); // handle exceptions thrown by .read() and .write()
 					file.close();
 					System.out.println("Sent file " + fileName + " to " + socket.getInetAddress() + ":" + socket.getPort() + "\n");
-					} catch (Exception e) {
-						System.err.println("Exception while reading/writing file");
+					} catch (IOException e) {
+						System.err.println("Exception while reading and sending file");
 					}
 				} else {
 					// entityBody will hold the 404 page if the file doesn't exist
@@ -162,7 +184,7 @@ public final class WebServer {
 	
 	
 			} catch (IOException e) {
-				System.err.println("Error while sending resposne");
+				System.err.println("Error while sending response headers");
 			} finally {
 				try {
 					socket.close();
@@ -179,12 +201,12 @@ public final class WebServer {
 	 	 * determines a the content type of the file request based on file extension
 	 	 */
 		private static String contentType(String file) {
-			if(file.endsWith(".html") || file.endsWith(".html"))
-				return "text/html";
+			if(file.endsWith(".html") || file.endsWith(".htm"))
+				return "text/html; charset=UTF-8";
 			else if(file.endsWith(".css"))
-				return "text/css";
+				return "text/css; charset=UTF-8";
 			else if(file.endsWith(".js"))
-				return "text/javascript";
+				return "text/javascript; charset=UTF-8";
 			else if(file.endsWith(".gif"))
 				return "image/gif";
 			else if(file.endsWith(".jpg") || file.endsWith(".jpeg"))
@@ -192,19 +214,30 @@ public final class WebServer {
 			else if(file.endsWith(".png"))
 				return "image/png";
 			
-			return "unknown"; // TODO change this
+			return "unknown"; // this case should never be encountered because this method only executes
+							  // if the file is found, and our server should support any kind of file that
+							  // is stored on it. If a filetype unsupported by this method is requested, a check
+							  // where this method is called will remove the content-type response line per
+							  // tools.ietf.org/html/rfc7231#section-3.1.1.5h 
+							  // "A sender that generates a message containing a payload body SHOULD
+							  //  generate a Content-Type header field in that message unless the
+							  //  intended media type of the enclosed representation is unknown to the
+							  //  sender."
 		}		
 		
 		/*
 	 	 * writes the contents of a specified file out to the the client
 	 	 */
-		private static void sendBytes(FileInputStream file, DataOutputStream outToClient) throws Exception {
+		private static void sendBytes(FileInputStream file, DataOutputStream outToClient) throws IOException {
 			byte[] buffer = new byte[1024];
 			int bytes = 0;
 			// copy requested file into the socket's output stream
-			while((bytes = file.read(buffer)) != -1) {
-				outToClient.write(buffer, 0, bytes);
-			}	
+			// synchronize the file object so multiple threads aren't reading from the same file at a time
+			synchronized (file) {
+				while((bytes = file.read(buffer)) != -1) {
+					outToClient.write(buffer, 0, bytes);
+				}	
+			}
 		}
 	}
 }
