@@ -126,9 +126,9 @@ public final class WebServer {
 				// normal response
 				if(fileExists) {
 					statusLine = "HTTP/1.1 200 OK\n";
-					String contentType = "Content-type: " + contentType(fileName) + "\n";
+					String contentType = contentType(fileName);
 					if(!contentType.equals("unknown"))
-						contentTypeLine = contentType;
+						contentTypeLine = "Content-type: " + contentType + "\n"; // leaves the contentType as null if unkown
 
 				// document not found, build 404 page
 				} else {
@@ -142,7 +142,7 @@ public final class WebServer {
 								 "<BODY>The requested file could not be found on the server. Click <a href=\"./index.html\">here</a> to go to home page.\n" +
 								"<p>You will be automatically redirected in 3 seconds.</p>\n" +
 								"<SCRIPT>\n" +
-								"window.setTimeout(function(){ window.location.replace(\'/index.html\'); },3000)\n" +
+								"window.setTimeout(function(){ window.location.replace(\'/index.html\'); },3000)\n" + // .replace() because we don't want the browser's back button to return to the 404 page
 								 "</SCRIPT>" +
 								 "<BODY>\n" +
 								 "</HTML>";
@@ -151,12 +151,14 @@ public final class WebServer {
 	
 				// Send the responses
 				outToClient.writeBytes(statusLine);
-				if(contentTypeLine != null) // see comment in contentType() for explanation
-					outToClient.writeBytes(contentTypeLine);
-				outToClient.writeBytes(CRLF); 
 
-				// log the header that was sent to client
-				// synchronized ensures the order of print statements won't mix with other threads
+				// see comment in contentType() for explanation
+				if(contentTypeLine != null)
+					outToClient.writeBytes(contentTypeLine);
+				outToClient.writeBytes(CRLF);
+
+				// log the headers that were sent to client
+				// synchronized ensures the order of print statements won't mix with those in other threads
 				synchronized(System.out) {
 					System.out.println("---------- Begin server response header ------");
 					System.out.println(statusLine);
@@ -167,20 +169,25 @@ public final class WebServer {
 				if(fileExists) {
 					try {
 						sendBytes(file, outToClient); // handle exceptions thrown by .read() and .write()
-					file.close();
-					System.out.println("Sent file " + fileName + " to " + socket.getInetAddress() + ":" + socket.getPort() + "\n");
+						file.close();
+						System.out.println("Sent file " + fileName + " to " + socket.getInetAddress() + ":" + socket.getPort() + "\n");
 					} catch (IOException e) {
 						System.err.println("Exception while reading and sending file");
+					} finally {
+						try {
+							file.close();
+						} catch (IOException exc) {
+							// we tried
+						}
 					}
-				} else {
-					// entityBody will hold the 404 page if the file doesn't exist
+				} else { // entityBody will hold the 404 page if the file doesn't exist
 					outToClient.writeBytes(entityBody);
 				}
-	
+
 				// close data streams
 				inFromClient.close();
+				outToClient.flush();
 				outToClient.close();
-			
 	
 	
 			} catch (IOException e) {
@@ -213,11 +220,13 @@ public final class WebServer {
 				return "image/jpeg";
 			else if(file.endsWith(".png"))
 				return "image/png";
+			else if(file.endsWith(".pdf"))
+				return "application/pdf";
 			
-			return "unknown"; // this case should never be encountered because this method only executes
+			return "unknown"; // This case should never be encountered because this method only executes
 							  // if the file is found, and our server should support any kind of file that
-							  // is stored on it. If a filetype unsupported by this method is requested, a check
-							  // where this method is called will remove the content-type response line per
+							  // is stored on its working directory. If a filetype unsupported by this method is legitimately 
+							  // requested, a check where this method is called removes the content-type response line per
 							  // tools.ietf.org/html/rfc7231#section-3.1.1.5h 
 							  // "A sender that generates a message containing a payload body SHOULD
 							  //  generate a Content-Type header field in that message unless the
@@ -231,8 +240,8 @@ public final class WebServer {
 		private static void sendBytes(FileInputStream file, DataOutputStream outToClient) throws IOException {
 			byte[] buffer = new byte[1024];
 			int bytes = 0;
-			// copy requested file into the socket's output stream
-			// synchronize the file object so multiple threads aren't reading from the same file at a time
+			// copy requested file into the socket's output stream using a buffer
+			// synchronize the FileInputStream object so multiple threads can't read from the same file at a time
 			synchronized (file) {
 				while((bytes = file.read(buffer)) != -1) {
 					outToClient.write(buffer, 0, bytes);
