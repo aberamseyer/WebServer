@@ -12,8 +12,15 @@ import java.lang.NumberFormatException;
 
 public final class WebServer {
 	public static void main(String args[]) {
+		
+		// smaller servers probably have no more than 16 physical cores, note that increasing this
+		// beyond the physical core count shouldn't increase performance.
+		final short THREAD_POOL_SIZE = 10;
+
 		int port = 0;
-		ExecutorService pool = Executors.newFixedThreadPool(30);
+		ExecutorService pool = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
+
+		// validate parameters
 		if(args.length != 1) {
 			System.err.println("Usage: java WebServer port");
 			System.exit(1);
@@ -70,12 +77,12 @@ public final class WebServer {
 				
 				String requestLine = inFromClient.readLine();
 
-				// synchronized ensures the order of print statements won't mix with other threads
+				// synchronized ensures that these print statements won't mix with other threads'
 				synchronized(System.out) {
 					System.out.println("---------- Begin client request header -----");
 					System.out.println(requestLine);
 	
-					String headerLine = null;
+					String headerLine = "";
 					while((headerLine = inFromClient.readLine()).length() != 0) {
 						System.out.println(headerLine);
 					}
@@ -92,31 +99,10 @@ public final class WebServer {
 
 				String fileName = tokens.nextToken();
 
-				if(fileName.equals("/")) // user sent blank information after host/port, default to index page
-					fileName += "index.html";
-
-				fileName = "." + fileName; // make this UNIX-friendly
-
-				if(fileName.endsWith("/")) // remove a trailing '/' character
-					fileName = fileName.substring(0, fileName.length()-1);
-
-				while(fileName.contains("..")) // remove any .. that may allow access to unintended files in other directories 
-					fileName = fileName.replace("..", ".");
-
-				// Open the requested file
+				// attempt to open the requested file
 				FileInputStream file = null;
-				boolean fileExists = true;
-					
-				try {
-					file = new FileInputStream(fileName);
-				} catch (FileNotFoundException e) {
-					try {
-						fileName = fileName.replaceFirst(".", ""); // removes the "." appended earlier in the program
-						file = new FileInputStream("./" + fileName); // retry with preceeding "./" if not found
-					} catch (FileNotFoundException exc) {
-						fileExists = false; // give up, couldn't find the file
-					}
-				} 
+				file = openFile(fileName);
+
 				
 				// Construct the response message
 				String statusLine = "";
@@ -124,7 +110,7 @@ public final class WebServer {
 				String entityBody = "";
 
 				// normal response
-				if(fileExists) {
+				if(file != null) {
 					statusLine = "HTTP/1.1 200 OK\n";
 					String contentType = contentType(fileName);
 					if(!contentType.equals("unknown"))
@@ -132,8 +118,8 @@ public final class WebServer {
 
 				// document not found, build 404 page
 				} else {
-					statusLine = "HTTP/1.1 404 Not Found";
-					contentTypeLine = "text/html";
+					statusLine = "HTTP/1.1 404 Not Found\n";
+					contentTypeLine = "text/html\n";
 					entityBody = "<!DOCTYPE html>\n" +
 								 "<HTML>\n" +
 								 "<HEAD>\n" +
@@ -161,12 +147,12 @@ public final class WebServer {
 				// synchronized ensures the order of print statements won't mix with those in other threads
 				synchronized(System.out) {
 					System.out.println("---------- Begin server response header ------");
-					System.out.println(statusLine);
-					System.out.println(contentTypeLine);
+					System.out.print(statusLine);
+					System.out.print(contentTypeLine);
 					System.out.println("---------- End server response header --------\n\n");
 				}
 
-				if(fileExists) {
+				if(file != null) {
 					try {
 						sendBytes(file, outToClient); // handle exceptions thrown by .read() and .write()
 						file.close();
@@ -247,6 +233,45 @@ public final class WebServer {
 					outToClient.write(buffer, 0, bytes);
 				}	
 			}
+		}
+	
+		/*
+ 		 * attempts to open the requested file. upon failure, make some adjustments to the file name
+ 		 * and try again
+ 		 */
+		private static FileInputStream openFile(String fileName) {
+			FileInputStream file = null;
+			if(fileName.equals("/")) // user sent blank information after host/port, default to index page
+				fileName += "index.html";
+
+			fileName = "." + fileName; // make this UNIX-friendly
+
+			if(fileName.endsWith("/")) // remove a trailing '/' character
+				fileName = fileName.substring(0, fileName.length()-1);
+
+			while(fileName.contains("..")) // remove any .. that may allow access to unintended files in other directories 
+				fileName = fileName.replace("..", ".");
+
+			try {
+				file = new FileInputStream(fileName);
+				return file;
+			} catch (FileNotFoundException e) {
+				try {
+					// manipulate the beginning some more to see if we can locate the file
+					if(!fileName.startsWith("./"))
+						fileName = "./" + fileName;
+					while(fileName.contains(".."))
+						fileName = fileName.replace("..", ".");
+					while(fileName.contains("//"))
+						fileName = fileName.replace("//", "/");
+					fileName = fileName.replace("/.", "/");
+					file = new FileInputStream(fileName); // retry with preceeding "./" if not found
+					return file;
+				} catch (FileNotFoundException exc) {
+					// give up, couldn't find the file
+					return null;
+				}
+			} 
 		}
 	}
 }
