@@ -101,9 +101,17 @@ public final class WebServer {
 
 				// attempt to open the requested file
 				FileInputStream file = null;
-				file = openFile(fileName);
-
-				
+				File fileObj = null;
+				fileObj = locateFile(fileName);
+				try {
+					fileName = fileObj.getPath();
+					file = new FileInputStream(fileObj);
+				} catch (FileNotFoundException e) {
+					// do nothing because we handle an empty input stream later
+				} catch (NullPointerException e) {
+					// do nothing, file wasn't located
+				}	
+	
 				// Construct the response message
 				String statusLine = "";
 				String contentTypeLine = null;
@@ -116,7 +124,7 @@ public final class WebServer {
 					if(!contentType.equals("unknown"))
 						contentTypeLine = "Content-type: " + contentType + "\n"; // leaves the contentType as null if unkown
 
-				// document not found, build 404 page
+				// file not found, build 404 page
 				} else {
 					statusLine = "HTTP/1.1 404 Not Found\n";
 					contentTypeLine = "text/html\n";
@@ -236,42 +244,59 @@ public final class WebServer {
 		}
 	
 		/*
- 		 * attempts to open the requested file. upon failure, make some adjustments to the file name
- 		 * and try again
+ 		 * manipulates the file name to make it readable (if its not)
+ 		 * attempts to open the requested file. upon failure, make 
+ 		 * some more adjustments to the file name and try again
  		 */
-		private static FileInputStream openFile(String fileName) {
-			FileInputStream file = null;
+		private static File locateFile(String fileName) {
+			File file = null;
 			if(fileName.equals("/")) // user sent blank information after host/port, default to index page
 				fileName += "index.html";
 
-			fileName = "." + fileName; // make this UNIX-friendly
-
-			if(fileName.endsWith("/")) // remove a trailing '/' character
-				fileName = fileName.substring(0, fileName.length()-1);
+			while(fileName.contains("//")) // remove any duplicate '//' characters
+				fileName = fileName.replace("//", "/");
 
 			while(fileName.contains("..")) // remove any .. that may allow access to unintended files in other directories 
 				fileName = fileName.replace("..", ".");
 
+			if(fileName.endsWith("/"))	   // remove any trailing '/' characters
+				fileName = fileName.substring(0, fileName.length()-1);
+
+			// case 1: will convert /index.html/styles.css -> styles.css
+			// case 2: will convert /index.html/ -> /index.html
+			System.out.println("file: " + fileName);
 			try {
-				file = new FileInputStream(fileName);
-				return file;
-			} catch (FileNotFoundException e) {
-				try {
-					// manipulate the beginning some more to see if we can locate the file
-					if(!fileName.startsWith("./"))
-						fileName = "./" + fileName;
-					while(fileName.contains(".."))
-						fileName = fileName.replace("..", ".");
-					while(fileName.contains("//"))
-						fileName = fileName.replace("//", "/");
-					fileName = fileName.replace("/.", "/");
-					file = new FileInputStream(fileName); // retry with preceeding "./" if not found
-					return file;
-				} catch (FileNotFoundException exc) {
-					// give up, couldn't find the file
-					return null;
+				if(fileName.lastIndexOf("/") != fileName.indexOf("/")) { // checking if multiple '/' exist 
+					if(fileName.lastIndexOf(".") != fileName.indexOf(".")) // checking if multiple '.' exist
+						fileName = fileName.split("/")[2]; // case 1 
+					else
+						fileName = fileName.split("/")[1]; // case 2 
 				}
-			} 
+			} catch (ArrayIndexOutOfBoundsException e) { // encountered a case that breaks these checks in case I didn't think of everything
+				return null;
+			}
+
+			System.out.println("file: " + fileName);
+			file = new File(fileName);
+			if(file.exists())
+				return file;
+
+			// manipulate the beginning some more to see if we can locate the file
+			if(!fileName.startsWith("./"))
+				fileName = "./" + fileName;
+			while(fileName.contains(".."))
+				fileName = fileName.replace("..", ".");
+			while(fileName.contains("//"))
+				fileName = fileName.replace("//", "/");
+			fileName = fileName.replace("/.", "/");
+			if(fileName.lastIndexOf(".") != fileName.indexOf(".", 1) && fileName.indexOf(".") != fileName.lastIndexOf("."))
+				fileName = fileName.substring(0, fileName.lastIndexOf("."));
+
+			file = new File(fileName); // retry with preceeding "./" if not found
+			if(file.exists())
+				return file;
+			else
+				return null;
 		}
 	}
 }
